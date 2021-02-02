@@ -1,12 +1,20 @@
+/*
+	fetch.c
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #include "fetch.h"
 
 #include "set.h"
 
 #include "schemes/file.h"
+#include "schemes/https.h"
 
 #include <stdlib.h>
 #include <string.h>
-#include <err.h>
+#include <syslog.h>
 
 struct scheme {
 	const char *name;
@@ -24,6 +32,15 @@ static const struct scheme schemes[] = {
 		file_scheme_packages,
 		file_scheme_close
 	},
+#if 0
+	{ /* HTTPS scheme, secure fetch remotely */
+		HTTPS_SCHEME,
+		https_scheme_open,
+		https_scheme_snapshot,
+		https_scheme_packages,
+		https_scheme_close
+	},
+#endif
 };
 
 static const struct scheme *scheme;
@@ -40,7 +57,8 @@ fetch_open(const struct state *state, const char *uri) {
 		const char * const schemenameend = strchr(current->name, ':');
 
 		if(schemenameend == NULL) {
-			errx(EXIT_FAILURE, "Invalid scheme for uri '%s'", uri);
+			syslog(LOG_ERR, "Invalid scheme for uri '%s'", uri);
+			exit(EXIT_FAILURE);
 		}
 
 		if(urilength == schemenameend - schemename
@@ -50,27 +68,44 @@ fetch_open(const struct state *state, const char *uri) {
 	}
 
 	if(current == end) {
-		errx(EXIT_FAILURE, "Unsupported scheme for uri '%s'", uri);
+		syslog(LOG_ERR, "Unsupported scheme for uri '%s'", uri);
+		exit(EXIT_FAILURE);
 	}
 
 	scheme = current;
 
 	/* Then we can open it as is */
 	scheme->open(state, uri);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 
 void
 fetch_snapshot(const struct state *state) {
 	scheme->snapshot(state);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 
 void
 fetch_new_packages(const struct state *state, const struct set *newpackages) {
 	scheme->packages(state, newpackages);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 
 void
 fetch_close(const struct state *state) {
 	scheme->close(state);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 

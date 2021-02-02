@@ -1,8 +1,15 @@
+/*
+	set.c
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #include "set.h"
 
 #include <stdlib.h>
 #include <string.h>
-#include <err.h>
+#include <syslog.h>
 
 /* TODO: Benchmark array against hash table
  * manipulating strings requires memory locality,
@@ -121,7 +128,8 @@ set_insert(struct set *set, const void *element) {
 			void *newelements = realloc(set->elements, newcapacity);
 
 			if(newelements == NULL) {
-				err(EXIT_FAILURE, "set_insert: Element of %lu bytes", elementsize);
+				syslog(LOG_ERR, "set_insert: Element of %lu bytes: %m", elementsize);
+				exit(EXIT_FAILURE);
 			}
 
 			set->capacity = newcapacity;

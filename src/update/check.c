@@ -1,10 +1,17 @@
+/*
+	check.c
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #include "check.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <syslog.h>
 #include <errno.h>
-#include <err.h>
 
 bool
 check_pending(struct state *state) {
@@ -21,7 +28,7 @@ check_new_geister(struct state *state, const struct set *newgeister) {
 	bool foundone = false;
 	const void *element;
 	size_t elementsize;
-	while(set_iterator_next(&newgeisteriterator, &element, &elementsize)) {
+	while(!state->shouldexit && set_iterator_next(&newgeisteriterator, &element, &elementsize)) {
 		/* As we only need to check if one of the new geist is correct,
 		 * we won't bother handling every cases of new geist like in annul or apply,
 		 * here, we'll only check if the geist is present with the right target */
@@ -42,7 +49,8 @@ check_new_geister(struct state *state, const struct set *newgeister) {
 
 		if(destlength == -1) {
 			if(errno != ENOENT) {
-				err(EXIT_FAILURE, "check_new_geister: Unable to readlink %s", path);
+				syslog(LOG_ERR, "check_new_geister: Unable to readlink %s: %m", path);
+				exit(EXIT_FAILURE);
 			}
 		} else {
 			dest[packagelength] = '\0';
@@ -54,6 +62,10 @@ check_new_geister(struct state *state, const struct set *newgeister) {
 	}
 
 	set_iterator_deinit(&newgeisteriterator);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 
 	return foundone;
 }

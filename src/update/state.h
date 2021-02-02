@@ -1,6 +1,14 @@
+/*
+	state.h
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #ifndef UPDATE_STATE_H
 #define UPDATE_STATE_H
 
+#include <stdbool.h>
 #include <time.h>
 
 #include <hny.h>
@@ -11,6 +19,8 @@
 #define STATE_SNAPSHOT_PENDING "pending"
 
 struct state {
+	bool shouldexit; /* Used when receiving sigterm interruption to avoid corruption */
+
 	struct hny *hny;   /* Honey prefix of system */
 	int dirfd;         /* File descriptor for directory of snapshot and pending */
 

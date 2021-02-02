@@ -1,3 +1,10 @@
+/*
+	apply.c
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #include "apply.h"
 
 #include <stdio.h>
@@ -6,8 +13,8 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/wait.h>
+#include <syslog.h>
 #include <errno.h>
-#include <err.h>
 
 #include <hny.h>
 
@@ -20,22 +27,26 @@ apply_new_geister_spawn(struct state *state, const char *geist, const char *path
 	/* If an error happens here, note no process was forked in hny_spawn. */
 	const int errcode = hny_spawn(state->hny, geist, path, &pid);
 	if(errcode != 0) {
-		errx(EXIT_FAILURE, "apply_new_geister: Unable to spawn step %s for %s: %s", step, geist, strerror(errcode));
+		syslog(LOG_ERR, "apply_new_geister: Unable to spawn %s for %s: %s", step, geist, strerror(errcode));
+		exit(EXIT_FAILURE);
 	}
 
 	if(waitpid(pid, &wstatus, 0) != pid) {
-		err(EXIT_FAILURE, "apply_new_geister: waitpid failed at step %s for %s", step, geist);
+		syslog(LOG_ERR, "apply_new_geister: waitpid failed at %s for %s: %m", step, geist);
+		exit(EXIT_FAILURE);
 	}
 
 	if(WIFSIGNALED(wstatus)) {
-		errx(EXIT_FAILURE, "apply_new_geister: Spawned step %s for %s was ended with a signal: %s", step, geist, strsignal(WTERMSIG(wstatus)));
+		syslog(LOG_ERR, "apply_new_geister: Spawned %s for %s was ended with a signal: %s", step, geist, strsignal(WTERMSIG(wstatus)));
+		exit(EXIT_FAILURE);
 	}
 
 	if(WIFEXITED(wstatus)) {
 		const int status = WEXITSTATUS(wstatus);
 
 		if(status != 0) {
-			errx(EXIT_FAILURE, "apply_new_geister: Spawned step %s for %s exited with code %d", step, geist, status);
+			syslog(LOG_ERR, "apply_new_geister: Spawned %s for %s exited with code %d", step, geist, status);
+			exit(EXIT_FAILURE);
 		}
 	}
 }
@@ -55,7 +66,10 @@ apply_new_geister(struct state *state, const struct set *newgeister, const struc
 
 	const void *element;
 	size_t elementsize;
-	while(set_iterator_next(&newgeisteriterator, &element, &elementsize)) {
+	while(!state->shouldexit && set_iterator_next(&newgeisteriterator, &element, &elementsize)) {
+		/* This section is critical, if the geist is not shifted correctly, this is the only case where this process
+		 * could not recover at all, SIGTERM (and optionnaly SIGINT) are modified to handle a state flag notifying
+		 * us to exit as soon as possible */
 		const char * const geist = element;
 		const char * const package = geist + strlen(geist) + 1;
 		const bool isnewpackage = set_find(newpackages, package, NULL);
@@ -69,7 +83,8 @@ apply_new_geister(struct state *state, const struct set *newgeister, const struc
 		/* Shift it in any case */
 		errcode = hny_shift(state->hny, geist, package);
 		if(errcode != 0) {
-			errx(EXIT_FAILURE, "apply_new_geister: Unable to shift %s to %s: %s", geist, package, strerror(errcode));
+			syslog(LOG_ERR, "apply_new_geister: Unable to shift %s to %s: %s", geist, package, strerror(errcode));
+			exit(EXIT_FAILURE);
 		}
 
 		/* Setup the geist if we are a new package */
@@ -79,20 +94,30 @@ apply_new_geister(struct state *state, const struct set *newgeister, const struc
 	}
 
 	set_iterator_deinit(&newgeisteriterator);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 
 void
 apply_pending(struct state *state) {
 	if(unlinkat(state->dirfd, STATE_SNAPSHOT_CURRENT, 0) != 0) {
-		err(EXIT_FAILURE, "apply_pending: Unable to remove " STATE_SNAPSHOT_CURRENT);
+		syslog(LOG_ERR, "apply_pending: Unable to remove " STATE_SNAPSHOT_CURRENT ": %m");
+		exit(EXIT_FAILURE);
 	}
 
 	if(renameat(state->dirfd, STATE_SNAPSHOT_PENDING, state->dirfd, STATE_SNAPSHOT_CURRENT) != 0) {
-		err(EXIT_FAILURE, "apply_pending: Unable to rename " STATE_SNAPSHOT_PENDING " to " STATE_SNAPSHOT_CURRENT);
+		syslog(LOG_ERR, "apply_pending: Unable to rename " STATE_SNAPSHOT_PENDING " to " STATE_SNAPSHOT_CURRENT ": %m");
+		exit(EXIT_FAILURE);
 	}
 
 	set_empty(&state->pending);
 	state_parse_current(state);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 
 void
@@ -102,10 +127,11 @@ apply_cleanup(struct state *state) {
 	struct dirent *entry;
 
 	if(dirp == NULL) {
-		err(EXIT_FAILURE, "apply_cleanup: opendir %s", hny_path(state->hny));
+		syslog(LOG_ERR, "apply_cleanup: opendir %s: %m", hny_path(state->hny));
+		exit(EXIT_FAILURE);
 	}
 
-	while(errno = 0, entry = readdir(dirp), entry != NULL) {
+	while(errno = 0, entry = readdir(dirp), !state->shouldexit && entry != NULL) {
 		/* If hidden file/dir, or . or .., ignore it */
 		if(*entry->d_name == '.') {
 			continue;
@@ -117,7 +143,8 @@ apply_cleanup(struct state *state) {
 				const int errcode = hny_remove(state->hny, entry->d_name);
 
 				if(errcode != 0) {
-					errx(EXIT_FAILURE, "apply_cleanup: Unable to remove package %s: %s", entry->d_name, strerror(errcode));
+					syslog(LOG_ERR, "apply_cleanup: Unable to remove package %s: %s", entry->d_name, strerror(errcode));
+					exit(EXIT_FAILURE);
 				}
 			}
 			break;
@@ -134,21 +161,27 @@ apply_cleanup(struct state *state) {
 				strncpy(path + prefixpathlength + 1, entry->d_name, geistlength + 1);
 
 				if(unlink(path) != 0) {
-					err(EXIT_FAILURE, "apply_cleanup: Unable to unlink %s", entry->d_name);
+					syslog(LOG_ERR, "apply_cleanup: Unable to unlink %s: %m", entry->d_name);
+					exit(EXIT_FAILURE);
 				}
 			}
 			break;
 		default:
 			/* Unknown sh*t, nothing to do here */
-			warnx("Invalid entry in prefix %s: %s", hny_path(state->hny), entry->d_name);
+			syslog(LOG_WARNING, "Invalid entry in prefix %s: %s", hny_path(state->hny), entry->d_name);
 			break;
 		}
 	}
 
 	if(errno != 0) {
-		err(EXIT_FAILURE, "apply_cleanup: readdir");
+		syslog(LOG_ERR, "apply_cleanup: readdir: %m");
+		exit(EXIT_FAILURE);
 	}
 
 	closedir(dirp);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 

@@ -1,3 +1,10 @@
+/*
+	apply.h
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #ifndef UPDATE_APPLY_H
 #define UPDATE_APPLY_H
 

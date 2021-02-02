@@ -1,10 +1,17 @@
+/*
+	annul.c
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #include "annul.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <err.h>
+#include <syslog.h>
 
 #include <hny.h>
 
@@ -13,10 +20,15 @@ annul_pending(struct state *state) {
 	/* We only have to remove the file, and empty the pending set */
 
 	if(unlinkat(state->dirfd, STATE_SNAPSHOT_PENDING, 0) != 0) {
-		err(EXIT_FAILURE, "annul_pending: Unable to remove " STATE_SNAPSHOT_PENDING " snapshot");
+		syslog(LOG_ERR, "annul_pending: Unable to remove " STATE_SNAPSHOT_PENDING " snapshot: %m");
+		exit(EXIT_FAILURE);
 	}
 
 	set_empty(&state->pending);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 
 static void
@@ -28,22 +40,26 @@ annul_new_geister_spawn(struct state *state, const char *geist, const char *path
 	/* If an error happens here, note no process was forked in hny_spawn. */
 	const int errcode = hny_spawn(state->hny, geist, path, &pid);
 	if(errcode != 0) {
-		errx(EXIT_FAILURE, "annul_new_geister: Unable to spawn step %s for %s: %s", step, geist, strerror(errcode));
+		syslog(LOG_ERR, "annul_new_geister: Unable to spawn %s for %s: %s", step, geist, strerror(errcode));
+		exit(EXIT_FAILURE);
 	}
 
 	if(waitpid(pid, &wstatus, 0) != pid) {
-		err(EXIT_FAILURE, "annul_new_geister: waitpid failed at step %s for %s", step, geist);
+		syslog(LOG_ERR, "annul_new_geister: waitpid failed at %s for %s: %m", step, geist);
+		exit(EXIT_FAILURE);
 	}
 
 	if(WIFSIGNALED(wstatus)) {
-		errx(EXIT_FAILURE, "annul_new_geister: Spawned step %s for %s was ended with a signal: %s", step, geist, strsignal(WTERMSIG(wstatus)));
+		syslog(LOG_ERR, "annul_new_geister: Spawned %s for %s was ended with a signal: %s", step, geist, strsignal(WTERMSIG(wstatus)));
+		exit(EXIT_FAILURE);
 	}
 
 	if(WIFEXITED(wstatus)) {
 		const int status = WEXITSTATUS(wstatus);
 
 		if(status != 0) {
-			errx(EXIT_FAILURE, "annul_new_geister: Spawned step %s for %s exited with code %d", step, geist, status);
+			syslog(LOG_ERR, "annul_new_geister: Spawned %s for %s exited with code %d", step, geist, status);
+			exit(EXIT_FAILURE);
 		}
 	}
 }
@@ -63,7 +79,7 @@ annul_new_geister(struct state *state, const struct set *newgeister, const struc
 
 	const void *element;
 	size_t elementsize;
-	while(set_iterator_next(&newgeisteriterator, &element, &elementsize)) {
+	while(!state->shouldexit && set_iterator_next(&newgeisteriterator, &element, &elementsize)) {
 		const size_t geistlength = strlen(element);
 		const char * const geist = element;
 		const char * const package = geist + geistlength + 1;
@@ -72,7 +88,21 @@ annul_new_geister(struct state *state, const struct set *newgeister, const struc
 
 		/* Clean new package */
 		if(isnewpackage) {
-			annul_new_geister_spawn(state, geist, "hny/clean");
+			/* The package can possibly not be present, if the fetch package
+			 * step didn't finish correctly */
+			const char * const prefixpath = hny_path(state->hny);
+			const size_t prefixpathlength = strlen(prefixpath);
+			const size_t packagelength = strlen(package);
+			char path[prefixpathlength + packagelength + 2]; /* One for the /, another for the terminating nul */
+
+			strncpy(path, prefixpath, prefixpathlength);
+			path[prefixpathlength] = '/';
+			strncpy(path + prefixpathlength + 1, package, packagelength + 1);
+
+			if(access(path, F_OK) == 0) {
+				/* Use package because the geist could have been removed while shifting */
+				annul_new_geister_spawn(state, package, "hny/clean");
+			}
 		}
 
 		if(set_find(&state->current, geist, &element)) {
@@ -81,7 +111,8 @@ annul_new_geister(struct state *state, const struct set *newgeister, const struc
 
 			errcode = hny_shift(state->hny, geist, oldpackage);
 			if(errcode != 0) {
-				errx(EXIT_FAILURE, "annul_new_geister: Unable to shift %s to %s: %s", geist, oldpackage, strerror(errcode));
+				syslog(LOG_ERR, "annul_new_geister: Unable to shift %s to %s: %s", geist, oldpackage, strerror(errcode));
+				exit(EXIT_FAILURE);
 			}
 
 			if(isnewpackage) {
@@ -98,11 +129,16 @@ annul_new_geister(struct state *state, const struct set *newgeister, const struc
 			strncpy(path + prefixpathlength + 1, geist, geistlength + 1);
 
 			if(unlink(path) != 0) {
-				err(EXIT_FAILURE, "annul_new_geister: Unable to unlink %s", geist);
+				syslog(LOG_ERR, "annul_new_geister: Unable to unlink %s: %m", geist);
+				exit(EXIT_FAILURE);
 			}
 		}
 	}
 
 	set_iterator_deinit(&newgeisteriterator);
+
+	if(state->shouldexit) {
+		exit(EXIT_SUCCESS);
+	}
 }
 

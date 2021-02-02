@@ -1,3 +1,10 @@
+/*
+	set.h
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #ifndef UPDATE_SET_H
 #define UPDATE_SET_H
 

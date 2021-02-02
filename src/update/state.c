@@ -1,29 +1,41 @@
+/*
+	state.c
+	Copyright (c) 2021, Valentin Debon
+
+	This file is part of the update program
+	subject the BSD 3-Clause License, see LICENSE
+*/
 #include "state.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <err.h>
 
 void
 state_init(struct state *state, const char *prefix, int flags, const char *snapshots) {
+	state->shouldexit = false;
+
 	int errcode = hny_open(&state->hny, prefix, flags);
 	if(errcode != 0) {
-		errx(EXIT_FAILURE, "update_init: Unable to open prefix at %s: %s", prefix, strerror(errcode));
+		syslog(LOG_ERR, "update_init: Unable to open prefix at %s: %s", prefix, strerror(errcode));
+		exit(EXIT_FAILURE);
 	}
 
 	errcode = hny_lock(state->hny);
 	if(errcode != 0) {
-		errx(EXIT_FAILURE, "update_init: Unable to lock prefix %s: %s", prefix, strerror(errcode));
+		syslog(LOG_ERR, "update_init: Unable to lock prefix %s: %s", prefix, strerror(errcode));
+		exit(EXIT_FAILURE);
 	}
 
 	state->dirfd = open(snapshots, O_RDONLY | O_DIRECTORY);
 	if(state->dirfd < 0) {
-		err(EXIT_FAILURE, "update_init: Unable to open snapshots at %s", prefix);
+		syslog(LOG_ERR, "update_init: Unable to open snapshots at %s: %m", prefix);
+		exit(EXIT_FAILURE);
 	}
 
 	/* Four states are accepted in the following section:
@@ -55,14 +67,16 @@ state_init(struct state *state, const char *prefix, int flags, const char *snaps
 			struct stat st;
 
 			if(fstatat(state->dirfd, STATE_SNAPSHOT_PENDING, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-				err(EXIT_FAILURE, "state_init: Unable to stat " STATE_SNAPSHOT_PENDING " snapshot");
+				syslog(LOG_ERR, "state_init: Unable to stat " STATE_SNAPSHOT_PENDING " snapshot: %m");
+				exit(EXIT_FAILURE);
 			}
 
 			if(st.st_size > 0) {
 				state_parse_pending(state);
 			} else {
 				if(unlinkat(state->dirfd, STATE_SNAPSHOT_PENDING, 0) != 0) {
-					err(EXIT_FAILURE, "state_init: Unable to unlink " STATE_SNAPSHOT_PENDING " snapshot");
+					syslog(LOG_ERR, "state_init: Unable to unlink " STATE_SNAPSHOT_PENDING " snapshot: %m");
+					exit(EXIT_FAILURE);
 				}
 			}
 		}
@@ -70,7 +84,8 @@ state_init(struct state *state, const char *prefix, int flags, const char *snaps
 		if(haspending) {
 
 			if(renameat(state->dirfd, STATE_SNAPSHOT_PENDING, state->dirfd, STATE_SNAPSHOT_CURRENT) != 0) {
-				err(EXIT_FAILURE, "state_init: Unable to rename " STATE_SNAPSHOT_PENDING " snapshot to " STATE_SNAPSHOT_CURRENT);
+				syslog(LOG_ERR, "state_init: Unable to rename " STATE_SNAPSHOT_PENDING " snapshot to " STATE_SNAPSHOT_CURRENT ": %m");
+				exit(EXIT_FAILURE);
 			}
 
 			state_parse_current(state);
@@ -124,7 +139,8 @@ parse_snapshot(struct set *snapshot, const char *filename) {
 	FILE *filep = fopen(filename, "r");
 
 	if(filep == NULL) {
-		err(EXIT_FAILURE, "parse_snapshot: Unable to open %s", filename);
+		syslog(LOG_ERR, "parse_snapshot: Unable to open %s: %m", filename);
+		exit(EXIT_FAILURE);
 	}
 
 	enum {
@@ -140,7 +156,8 @@ parse_snapshot(struct set *snapshot, const char *filename) {
 		const char *nul = memchr(line, '\0', linelength);
 
 		if(nul != NULL) {
-			errx(EXIT_FAILURE, "parse_snapshot: Ill formed snapshot %s contains zero byte at line %lu", filename, lineno);
+			syslog(LOG_ERR, "parse_snapshot: Ill formed snapshot %s contains zero byte at line %lu", filename, lineno);
+			exit(EXIT_FAILURE);
 		}
 
 		if(line[linelength] == '\n') {
@@ -162,13 +179,15 @@ parse_snapshot(struct set *snapshot, const char *filename) {
 				SWAP(ssize_t, geistlength, linelength);
 
 				if(set_find(snapshot, geist, NULL)) {
-					errx(EXIT_FAILURE, "parse_snapshot: Ill formed snapshot %s redundant geist %s at line %lu", filename, geist, lineno);
+					syslog(LOG_ERR, "parse_snapshot: Ill formed snapshot %s redundant geist %s at line %lu", filename, geist, lineno);
+					exit(EXIT_FAILURE);
 				}
 
 				parsing = PARSE_SNAPSHOT_EXPECT_PACKAGE;
 				break;
 			} else {
-				errx(EXIT_FAILURE, "parse_snapshot: Ill formed snapshot %s does not have a geist at line %lu", filename, lineno);
+				syslog(LOG_ERR, "parse_snapshot: Ill formed snapshot %s does not have a geist at line %lu", filename, lineno);
+				exit(EXIT_FAILURE);
 			}
 		case PARSE_SNAPSHOT_EXPECT_PACKAGE:
 			if(type == HNY_TYPE_PACKAGE) {
@@ -183,7 +202,8 @@ parse_snapshot(struct set *snapshot, const char *filename) {
 				parsing = PARSE_SNAPSHOT_NEXT_GEIST;
 				break;
 			} else {
-				errx(EXIT_FAILURE, "parse_snapshot: Ill formed snapshot %s does not have a geist as first entry", filename);
+				syslog(LOG_ERR, "parse_snapshot: Ill formed snapshot %s does not have a geist as first entry", filename);
+				exit(EXIT_FAILURE);
 			}
 		}
 
@@ -191,7 +211,8 @@ parse_snapshot(struct set *snapshot, const char *filename) {
 	}
 
 	if(errno != 0) {
-		err(EXIT_FAILURE, "parse_snapshot: Unable to read line from %s", filename);
+		syslog(LOG_ERR, "parse_snapshot: Unable to read line from %s: %m", filename);
+		exit(EXIT_FAILURE);
 	}
 
 	free(geist);
