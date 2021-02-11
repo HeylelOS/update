@@ -12,17 +12,11 @@ $(OBJECTS)/update/fetch.o: src/update/fetch.c $(OBJECTS)/update
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(OBJECTS)/update/main.o: src/update/main.c $(OBJECTS)/update
 	$(CC) $(CFLAGS) -c -o $@ $<
-$(OBJECTS)/update/schemes: $(OBJECTS)/update
-	$(MKDIR) -p $@
-$(OBJECTS)/update/schemes/file.o: src/update/schemes/file.c $(OBJECTS)/update/schemes
-	$(CC) $(CFLAGS) -c -o $@ $<
-$(OBJECTS)/update/schemes/https.o: src/update/schemes/https.c $(OBJECTS)/update/schemes
-	$(CC) $(CFLAGS) -c -o $@ $<
 $(OBJECTS)/update/set.o: src/update/set.c $(OBJECTS)/update
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(OBJECTS)/update/state.o: src/update/state.c $(OBJECTS)/update
 	$(CC) $(CFLAGS) -c -o $@ $<
-$(BINARIES)/update: $(OBJECTS)/update/annul.o $(OBJECTS)/update/apply.o $(OBJECTS)/update/check.o $(OBJECTS)/update/fetch.o $(OBJECTS)/update/main.o $(OBJECTS)/update/schemes/file.o $(OBJECTS)/update/schemes/https.o $(OBJECTS)/update/set.o $(OBJECTS)/update/state.o
+$(BINARIES)/update: $(OBJECTS)/update/annul.o $(OBJECTS)/update/apply.o $(OBJECTS)/update/check.o $(OBJECTS)/update/fetch.o $(OBJECTS)/update/main.o $(OBJECTS)/update/set.o $(OBJECTS)/update/state.o
 	$(LD) $(LDFLAGS) $(UPDATEFLAGS) -o $@ $^
 all: $(BINARIES)/update
 clean:

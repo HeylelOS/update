@@ -46,6 +46,7 @@ update_protect_termination(bool isinteractive) {
 	};
 
 	sigaction(SIGTERM, &action, NULL);
+	sigaction(SIGPIPE, &action, NULL);
 	if(isinteractive) {
 		sigaction(SIGINT, &action, NULL);
 	}

@@ -7,75 +7,118 @@
 */
 #include "fetch.h"
 
-#include "set.h"
-
-#include "schemes/file.h"
-#include "schemes/https.h"
-
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/select.h>
 #include <syslog.h>
 
-struct scheme {
-	const char *name;
-	void (*open)(const struct state *state, const char *uri);
-	void (*snapshot)(const struct state *state);
-	void (*packages)(const struct state *state, const struct set *packages);
-	void (*close)(const struct state *state);
+#include <curl/curl.h>
+#include <hny.h>
+
+#define FETCH_SNAPSHOT_BUFFER_DEFAULT_CAPACITY 4096
+
+struct snapshot_buffer {
+	size_t capacity, count;
+	void *data;
 };
 
-static const struct scheme schemes[] = {
-	{ /* File scheme, fetch directly from disk */
-		FILE_SCHEME,
-		file_scheme_open,
-		file_scheme_snapshot,
-		file_scheme_packages,
-		file_scheme_close
-	},
-#if 0
-	{ /* HTTPS scheme, secure fetch remotely */
-		HTTPS_SCHEME,
-		https_scheme_open,
-		https_scheme_snapshot,
-		https_scheme_packages,
-		https_scheme_close
-	},
-#endif
-};
+static size_t
+snapshot_buffer_write(const void *data, size_t one, size_t count, struct snapshot_buffer *buffer) {
+	while(buffer->capacity - buffer->count < count) {
+		const size_t newcapacity = buffer->capacity * 2;
+		void *newdata = realloc(buffer->data, newcapacity);
 
-static const struct scheme *scheme;
-
-void
-fetch_open(const struct state *state, const char *uri) {
-	/* We first need to find the scheme class */
-	const struct scheme *current = schemes,
-		* const end = schemes + sizeof(schemes) / sizeof(*schemes);
-	const size_t urilength = strlen(uri);
-
-	while(current != end) {
-		const char * const schemename = current->name;
-		const char * const schemenameend = strchr(current->name, ':');
-
-		if(schemenameend == NULL) {
-			syslog(LOG_ERR, "Invalid scheme for uri '%s'", uri);
-			exit(EXIT_FAILURE);
+		if(newdata == NULL) {
+			return 0;
 		}
 
-		if(urilength == schemenameend - schemename
-			&& strncasecmp(uri, schemename, urilength) == 0) {
-			break;
-		}
+		buffer->capacity = newcapacity;
+		buffer->data = newdata;
 	}
 
-	if(current == end) {
-		syslog(LOG_ERR, "Unsupported scheme for uri '%s'", uri);
+	memcpy((uint8_t *)buffer->data + buffer->count, data, count);
+
+	buffer->count += count;
+
+	return count;
+}
+
+static size_t
+package_write(const void *data, size_t one, size_t count, struct hny_extraction *extraction) {
+}
+
+static struct {
+	CURLM *multi;
+	CURLU *url;
+} curl;
+
+static void
+fetch_curl_run(const struct state *state, int *runningp) {
+	/* CURL's timeout */
+	struct timespec timeout;
+	long multitimeout;
+
+	if(curl_multi_timeout(curl.multi, &multitimeout) != CURLE_OK) {
+		syslog(LOG_ERR, "fetch_curl_run: curl_multi_timeout");
 		exit(EXIT_FAILURE);
 	}
 
-	scheme = current;
+	if(multitimeout > 0) {
+		timeout.tv_sec = multitimeout / 1000;
+		timeout.tv_nsec = (multitimeout % 1000) * 1000000;
+	} else {
+		timeout.tv_sec = 0;
+		timeout.tv_nsec = 0;
+	}
 
-	/* Then we can open it as is */
-	scheme->open(state, uri);
+	/* CURL's fdsets */
+	fd_set readset, writeset, exceptset;
+	int maxfd;
+
+	FD_ZERO(&readset);
+	FD_ZERO(&writeset);
+	FD_ZERO(&exceptset);
+
+	if(curl_multi_fdset(curl.multi, &readset, &writeset, &exceptset, &maxfd) != CURLE_OK) {
+		syslog(LOG_ERR, "fetch_curl_run: curl_multi_fdset");
+		exit(EXIT_FAILURE);
+	}
+
+	/* CURLs timeout, if no filedescriptors */
+	if(maxfd == -1) {
+		/* If there are no filedescriptors, curl_multi_fdset() doc suggests wait 100ms */
+		if(timeout.tv_sec > 0 || timeout.tv_nsec > 100000000) {
+			timeout.tv_sec = 0;
+			timeout.tv_nsec = 100000000;
+		}
+	}
+
+	/* Select */
+	if(pselect(maxfd + 1, &readset, &writeset, &exceptset, &timeout, NULL) == -1) {
+		syslog(LOG_ERR, "fetch_curl_run: pselect: %m");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Perform */
+	if(curl_multi_perform(curl.multi, runningp) != CURLE_OK) {
+		syslog(LOG_ERR, "fetch_curl_run: curl_multi_perform");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void
+fetch_open(const struct state *state, const char *uri) {
+
+	curl.multi = curl_multi_init();
+
+	curl.url = curl_url();
+	const CURLUcode ucode = curl_url_set(curl.url, CURLUPART_URL, uri, 0);
+	if(ucode != CURLUE_OK) {
+		syslog(LOG_ERR, "fetch_open: Invalid URI %s", uri);
+		exit(EXIT_FAILURE);
+	}
 
 	if(state->shouldexit) {
 		exit(EXIT_SUCCESS);
@@ -84,7 +127,67 @@ fetch_open(const struct state *state, const char *uri) {
 
 void
 fetch_snapshot(const struct state *state) {
-	scheme->snapshot(state);
+	/* Initialize the buffer */
+	struct snapshot_buffer buffer = {
+		.capacity = FETCH_SNAPSHOT_BUFFER_DEFAULT_CAPACITY,
+		.count = 0,
+		.data = malloc(buffer.capacity),
+	};
+
+	if(buffer.data == NULL) {
+		syslog(LOG_ERR, "fetch_snapshot: Unable to allocate memory for buffer");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Initialize the CURL easy handle (and URL) */
+	CURL * const easy = curl_easy_init();
+	CURLU *snapshoturl = curl_url_dup(curl.url);
+	char *snapshotpath;
+	CURLUcode ucode;
+
+	ucode = curl_url_set(snapshoturl, CURLUPART_URL, "snapshot", 0);
+	if(ucode != CURLE_OK) {
+		syslog(LOG_ERR, "fetch_snapshot: Unable to redirect url to snapshot");
+		exit(EXIT_FAILURE);
+	}
+
+	ucode = curl_url_get(snapshoturl, CURLUPART_URL, &snapshotpath, 0);
+	if(ucode != CURLE_OK) {
+		syslog(LOG_ERR, "fetch_snapshot: Unable to get snapshot redirect url");
+		exit(EXIT_FAILURE);
+	}
+
+	curl_easy_setopt(easy, CURLOPT_URL, snapshotpath);
+	curl_easy_setopt(easy, CURLOPT_WRITEDATA, &buffer);
+	curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, snapshot_buffer_write);
+
+	curl_free(snapshotpath);
+	curl_url_cleanup(snapshoturl);
+
+	/* Performing request */
+	int running;
+
+	curl_multi_add_handle(curl.multi, easy);
+
+	do {
+		fetch_curl_run(state, &running);
+	} while(running != 0);
+
+	curl_multi_remove_handle(curl.multi, easy);
+	curl_easy_cleanup(easy);
+
+	/* Pending snapshot in memory */
+	const int fd = openat(state->dirfd, STATE_SNAPSHOT_PENDING, O_CREAT | O_TRUNC, 0644);
+	const size_t writeval = write(fd, buffer.data, buffer.count);
+
+	if(writeval != buffer.count) {
+		syslog(LOG_ERR, "fetch_snapshot: Unable to atomically write to pending snapshot (%lu out of %lu)", buffer.count, writeval);
+		exit(EXIT_FAILURE);
+	}
+
+	close(fd);
+
+	free(buffer.data);
 
 	if(state->shouldexit) {
 		exit(EXIT_SUCCESS);
@@ -93,8 +196,6 @@ fetch_snapshot(const struct state *state) {
 
 void
 fetch_new_packages(const struct state *state, const struct set *newpackages) {
-	scheme->packages(state, newpackages);
-
 	if(state->shouldexit) {
 		exit(EXIT_SUCCESS);
 	}
@@ -102,7 +203,10 @@ fetch_new_packages(const struct state *state, const struct set *newpackages) {
 
 void
 fetch_close(const struct state *state) {
-	scheme->close(state);
+
+	curl_url_cleanup(curl.url);
+
+	curl_multi_cleanup(curl.multi);
 
 	if(state->shouldexit) {
 		exit(EXIT_SUCCESS);
