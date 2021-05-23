@@ -7,6 +7,8 @@
 */
 #include "set.h"
 
+#include "config.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
@@ -17,8 +19,6 @@
  * problems up to some threshold. A good benchmark should be done
  * to determine whether it does.
  */
-
-#define SET_DEFAULT_CAPACITY 1024
 
 /* FNV hash is extremely basic to implement */
 #define FNV_OFFSET_BASIS 0xCBF29CE484222325	
@@ -124,7 +124,7 @@ set_insert(struct set *set, const void *element) {
 		/* While the value cannot fit, update size */
 		const size_t elementsize = class->size_function(element);
 		while(set->capacity - set->size < elementsize) {
-			const size_t newcapacity = set->capacity == 0 ? SET_DEFAULT_CAPACITY : set->capacity * 2;
+			const size_t newcapacity = set->capacity == 0 ? CONFIG_DEFAULT_SET_CAPACITY : set->capacity * 2;
 			void *newelements = realloc(set->elements, newcapacity);
 
 			if(newelements == NULL) {

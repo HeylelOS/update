@@ -1,0 +1,25 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+/**
+ * Macro specifiying the default honey prefix.
+ */
+#define CONFIG_DEFAULT_HNY_PREFIX "@CONFIG_DEFAULT_HNY_PREFIX@"
+
+/**
+ * Macro specifiying the default snapshot directory.
+ */
+#define CONFIG_DEFAULT_SNAPSHOT_DIRECTORY "@CONFIG_DEFAULT_SNAPSHOT_DIRECTORY@"
+
+/**
+ * Macro specifiying the default snapshot buffer capacity.
+ */
+#define CONFIG_DEFAULT_FETCH_SNAPSHOT_BUFFER_CAPACITY @CONFIG_DEFAULT_FETCH_SNAPSHOT_BUFFER_CAPACITY@
+
+/**
+ * Macro specifiying the default set capacity in bytes.
+ */
+#define CONFIG_DEFAULT_SET_CAPACITY @CONFIG_DEFAULT_SET_CAPACITY@
+
+/* CONFIG_H */
+#endif

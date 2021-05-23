@@ -7,6 +7,8 @@
 */
 #include "fetch.h"
 
+#include "config.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -16,8 +18,6 @@
 
 #include <curl/curl.h>
 #include <hny.h>
-
-#define FETCH_SNAPSHOT_BUFFER_DEFAULT_CAPACITY 4096
 
 struct snapshot_buffer {
 	size_t capacity, count;
@@ -129,7 +129,7 @@ void
 fetch_snapshot(const struct state *state) {
 	/* Initialize the buffer */
 	struct snapshot_buffer buffer = {
-		.capacity = FETCH_SNAPSHOT_BUFFER_DEFAULT_CAPACITY,
+		.capacity = CONFIG_DEFAULT_FETCH_SNAPSHOT_BUFFER_CAPACITY,
 		.count = 0,
 		.data = malloc(buffer.capacity),
 	};

@@ -11,6 +11,8 @@
 #include "annul.h"
 #include "state.h"
 
+#include "config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -145,7 +147,7 @@ update_perform(struct state *state, const char *uri) {
 static void noreturn
 update_usage(const char *updatename, int status) {
 	fprintf(stderr, "usage: %s [-hb] [-p <prefix>] [-s <snapshots>] <uri>\n"
-	                "       %s -C [-hb] [-p <prefix>] [-s <snapshots>]\n",
+	                "       %s -c [-hb] [-p <prefix>] [-s <snapshots>]\n",
 		updatename, updatename);
 	exit(status);
 }
@@ -153,21 +155,21 @@ update_usage(const char *updatename, int status) {
 static struct update_args
 update_parse_args(int argc, char **argv) {
 	struct update_args args = {
-		.prefix = getenv("HNY_PREFIX"),
-		.snapshots = "/data/update",
+		.prefix = CONFIG_DEFAULT_HNY_PREFIX,
+		.snapshots = CONFIG_DEFAULT_SNAPSHOT_DIRECTORY,
 		.consistencyonly = 0,
 		.flags = 0,
 	};
 	int c;
 
-	while((c = getopt(argc, argv, ":hbCp:s:")) != -1) {
+	while((c = getopt(argc, argv, ":hbcp:s:")) != -1) {
 		switch(c) {
 		case 'h':
 			update_usage(*argv, EXIT_SUCCESS);
 		case 'b':
 			args.flags |= HNY_FLAGS_BLOCK;
 			break;
-		case 'C':
+		case 'c':
 			args.consistencyonly = 1;
 			break;
 		case 'p':
@@ -183,10 +185,6 @@ update_parse_args(int argc, char **argv) {
 			fprintf(stderr, "Unrecognized option -%c\n", optopt);
 			update_usage(*argv, EXIT_FAILURE);
 		}
-	}
-
-	if(args.prefix == NULL) {
-		args.prefix = "/hub";
 	}
 
 	if(argc - optind != !args.consistencyonly) {
